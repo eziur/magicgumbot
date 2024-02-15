@@ -1,6 +1,11 @@
-const { ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, SlashCommandBuilder, UserSelectMenuBuilder, RoleSelectMenuBuilder, Collection } = require('discord.js');
+const { ComponentType, Collection,
+	SlashCommandBuilder, ModalBuilder, ActionRowBuilder,
+	StringSelectMenuBuilder, StringSelectMenuOptionBuilder, UserSelectMenuBuilder, RoleSelectMenuBuilder,
+	ButtonBuilder, ButtonStyle, TextInputBuilder, TextInputStyle, ModalSubmitInteraction } = require('discord.js');
+const { request } = require('undici');
 
 async function manualRoleAssignment(initialInteraction) {
+	const finalSelections = new Collection();
 	const selectionsMade = [false, false];
 
 	const userSelect = new UserSelectMenuBuilder()
@@ -20,14 +25,9 @@ async function manualRoleAssignment(initialInteraction) {
 		.setLabel('Confirm')
 		.setStyle(ButtonStyle.Success);
 
-	const userSelectRow = new ActionRowBuilder()
-		.addComponents(userSelect);
-
-	const roleSelectRow = new ActionRowBuilder()
-		.addComponents(roleSelect);
-
-	const buttonRow = new ActionRowBuilder()
-		.addComponents(confirm);
+	const userSelectRow = new ActionRowBuilder().addComponents(userSelect);
+	const roleSelectRow = new ActionRowBuilder().addComponents(roleSelect);
+	const buttonRow = new ActionRowBuilder().addComponents(confirm);
 
 	const response = await initialInteraction.update({
 		content: 'Manual role assignment',
@@ -91,7 +91,6 @@ async function manualRoleAssignment(initialInteraction) {
 			userCollector.stop();
 			roleCollector.stop();
 
-			const finalSelections = new Collection();
 			for (let i = 0; i < userCollection.length; i++) {
 				const rolesToAssign = [];
 
@@ -104,6 +103,50 @@ async function manualRoleAssignment(initialInteraction) {
 			assign_roles(confirmButton, finalSelections);
 		}
 	});
+}
+
+async function automaticRoleAssignment(interaction) {
+	const finalSelections = new Collection();
+
+	const automaticRoleAssignmentModal = new ModalBuilder()
+		.setCustomId('automatic_role_assignment_modal')
+		.setTitle('Automatic Role Assignment');
+
+	const requestInput = new TextInputBuilder()
+		.setCustomId('api_request_input')
+		.setLabel("Enter Sheet ID")
+		.setStyle(TextInputStyle.Short)
+		.setPlaceholder('docs.google.com/spreadsheets/d/ID/edit')
+		.setRequired(true);
+
+	const requestInputRow = new ActionRowBuilder().addComponents(requestInput);
+
+	automaticRoleAssignmentModal.addComponents(requestInputRow);
+
+	await interaction.showModal(automaticRoleAssignmentModal);
+
+	const filter = (modalInteraction) => modalInteraction.customId === 'automatic_role_assignment_modal';
+
+	interaction.awaitModalSubmit({ filter, time: 600_000 })
+		.then(async modalSubmit => {
+			console.log(`${modalSubmit.customId} submitted`);
+			const spreadsheetID = modalSubmit.fields.getTextInputValue('api_request_input');
+
+			// request sheet from google docs api
+			const apiResult = await request(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetID}`);
+			const { sheet } = await apiResult.body.json();
+		})
+		.catch((err) => {
+			(console.error(err));
+		});
+
+	interaction.editReply('Sheet fetched');
+
+	// interpret returned JSON spreadhsheet representation
+
+	// repackage data into collection (userID, [role1, role2, ...])
+
+	assign_roles(interaction, finalSelections);
 }
 
 async function assign_roles(interaction, collection) {
@@ -157,7 +200,9 @@ module.exports = {
 			components: [modeSelectRow],
 		});
 
-		const collector = response.createMessageComponentCollector({ componentType: ComponentType.StringSelect, time: 3_600_000 });
+		const collectorFilter = i => i.user.id === interaction.user.id;
+
+		const collector = response.createMessageComponentCollector({ filter: collectorFilter, componentType: ComponentType.StringSelect, time: 3_600_000 });
 
 		collector.on('collect', async i => {
 			const selection = i.values[0];
@@ -165,23 +210,9 @@ module.exports = {
 			if (selection === 'manual') {
 				manualRoleAssignment(i);
 			}
+			else if (selection === 'automatic') {
+				automaticRoleAssignment(i);
+			}
 		});
-			// if (response.isStringSelectMenu()) {
-			// 	if (response.customId === 'select_mode') {
-			// 		const mode = interaction.values[0];
-
-			// 		await interaction.editReply({
-			// 			content: 'Manual mode',
-			// 			components: [],
-			// 		});
-			// 	}
-			// }
-			// else if (response.isButton()) {
-			// 	if (response.customId === 'cancel') {
-			// 		await interaction.update({
-			// 			content: 'Mode selection canceled.',
-			// 			components: [],
-			// 		});
-			// 	}
 	},
 };
