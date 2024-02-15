@@ -1,6 +1,8 @@
-const { ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, SlashCommandBuilder, UserSelectMenuBuilder, RoleSelectMenuBuilder, userMention, roleMention } = require('discord.js');
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, SlashCommandBuilder, UserSelectMenuBuilder, RoleSelectMenuBuilder, Collection } = require('discord.js');
 
-async function manualRoleAssignment(i) {
+async function manualRoleAssignment(initialInteraction) {
+	const selectionsMade = [false, false];
+
 	const userSelect = new UserSelectMenuBuilder()
 		.setCustomId('select_target_users')
 		.setPlaceholder('Select target users (Max 25)')
@@ -9,29 +11,35 @@ async function manualRoleAssignment(i) {
 
 	const roleSelect = new RoleSelectMenuBuilder()
 		.setCustomId('select_roles')
-		.setPlaceholder('Select roles (Max 5)')
+		.setPlaceholder('Select roles (Max 25)')
 		.setMinValues(1)
-		.setMaxValues(5);
+		.setMaxValues(25);
 
 	const confirm = new ButtonBuilder()
 		.setCustomId('confirm_manual_role_assign')
 		.setLabel('Confirm')
-		.setStyle(ButtonStyle.Success)
-		.setDisabled(true);
+		.setStyle(ButtonStyle.Success);
 
 	const userSelectRow = new ActionRowBuilder()
 		.addComponents(userSelect);
+
 	const roleSelectRow = new ActionRowBuilder()
 		.addComponents(roleSelect);
+
 	const buttonRow = new ActionRowBuilder()
 		.addComponents(confirm);
 
-	const response = await i.update({
+	const response = await initialInteraction.update({
 		content: 'Manual role assignment',
 		components: [userSelectRow, roleSelectRow, buttonRow],
 	});
 
-	const userCollector = response.createMessageComponentCollector({ componentType: ComponentType.UserSelect, time: 1_200_000 });
+	const collectorFilter = i => i.user.id === initialInteraction.user.id;
+
+	const userCollector = response.createMessageComponentCollector({ filter: collectorFilter, componentType: ComponentType.UserSelect, time: 1_200_000 });
+	const roleCollector = response.createMessageComponentCollector({ filter: collectorFilter, componentType: ComponentType.RoleSelect, time: 1_200_000 });
+	const buttonCollector = response.createMessageComponentCollector({ filter: collectorFilter, componentType: ComponentType.Button, time: 1_200_000 });
+
 	userCollector.on('collect', async userInput => {
 		await userInput.deferReply({ ephemeral: true });
 
@@ -41,32 +49,83 @@ async function manualRoleAssignment(i) {
 		}
 
 		let currentlySelectedUsers = `Currently Selected Users: `;
-		for (let j = 0; j < userInput.values.length; j++) {
-			currentlySelectedUsers += `${userMention(userInput.values[j])}, `;
-		}
+		userInput.users.each(key => currentlySelectedUsers += `${key}, `);
+
+		if (userInput.values.length > 0) selectionsMade[0] = true;
+		else selectionsMade[0] = false;
 
 		await userInput.editReply(currentlySelectedUsers);
 	});
 
-	const roleCollector = response.createMessageComponentCollector({ componentType: ComponentType.RoleSelect, time: 1_200_000 });
 	roleCollector.on('collect', async roleInput => {
 		await roleInput.deferReply({ ephemeral: true });
 
-		// if (roleCollector.collected.at(0).replied) {
-		// 	roleCollector.collected.at(0).deleteReply();
-		// 	roleCollector.collected.delete(roleCollector.collected.firstKey());
-		// }
+		if (roleCollector.collected.at(0).replied) {
+			roleCollector.collected.at(0).deleteReply();
+			roleCollector.collected.delete(roleCollector.collected.firstKey());
+		}
 
 		let currentlySelectedRoles = `Currently Selected Roles: `;
-		for (let j = 0; j < roleInput.values.length; j++) {
-			currentlySelectedRoles += `${roleMention(roleInput.values[j].id.toString())}, `;
-		}
+		roleInput.roles.each(key => currentlySelectedRoles += `${key}, `);
+
+		if (roleInput.values.length > 0) selectionsMade[1] = true;
+		else selectionsMade[1] = false;
 
 		await roleInput.editReply(currentlySelectedRoles);
 	});
-	// const buttonCollector = response.createMessageComponentCollector({ componentType: ComponentType.Button, time: 3_600_000 });
 
-	// });
+	buttonCollector.on('collect', async confirmButton => {
+		if (!selectionsMade[0] || !selectionsMade[1]) {
+			await confirmButton.reply({
+				content: 'Select at least 1 user and 1 role.',
+				ephemeral: true,
+			});
+		}
+		else {
+			await confirmButton.deferReply();
+
+			const userCollection = userCollector.collected.at(0).values;
+			const roleCollection = roleCollector.collected.at(0).values;
+			userCollector.collected.at(0).deleteReply();
+			roleCollector.collected.at(0).deleteReply();
+			userCollector.stop();
+			roleCollector.stop();
+
+			const finalSelections = new Collection();
+			for (let i = 0; i < userCollection.length; i++) {
+				const rolesToAssign = [];
+
+				for (let j = 0; j < roleCollection.length; j++) {
+					rolesToAssign.push(roleCollection[j]);
+				}
+				finalSelections.set(userCollection[i], rolesToAssign);
+			}
+
+			assign_roles(confirmButton, finalSelections);
+		}
+	});
+}
+
+async function assign_roles(interaction, collection) {
+	const guild = interaction.guild;
+	const iterator = collection[Symbol.iterator]();
+
+	let confirmationMessage = ``;
+
+	for (const item of iterator) {
+		const member = guild.members.cache.get(item[0]);
+		confirmationMessage += `Assigned `;
+
+		for (const roles of item[1]) {
+			const role = guild.roles.cache.get(roles);
+
+			member.roles.add(role);
+			confirmationMessage += `${role} `;
+		}
+
+		confirmationMessage += `to <@${item[0]}>. \n`;
+		await interaction.editReply(confirmationMessage);
+	}
 }
 
 module.exports = {
