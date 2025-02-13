@@ -4,10 +4,12 @@ const { ComponentType, Collection,
 	ButtonBuilder, ButtonStyle, TextInputBuilder, TextInputStyle, ModalSubmitInteraction } = require('discord.js');
 const { request, Dispatcher } = require('undici');
 
+// Manual role assignment option selected
 async function manualRoleAssignment(initialInteraction) {
 	const finalSelections = new Collection();
 	const selectionsMade = [false, false];
 
+	// Build component
 	const userSelect = new UserSelectMenuBuilder()
 		.setCustomId('select_target_users')
 		.setPlaceholder('Select target users (Max 25)')
@@ -29,6 +31,7 @@ async function manualRoleAssignment(initialInteraction) {
 	const row2 = new ActionRowBuilder().addComponents(roleSelect);
 	const row3 = new ActionRowBuilder().addComponents(confirm);
 
+	// Display component
 	const response = await initialInteraction.update({
 		content: 'Manual role assignment',
 		components: [row1, row2, row3],
@@ -40,6 +43,7 @@ async function manualRoleAssignment(initialInteraction) {
 	const roleCollector = response.createMessageComponentCollector({ filter: collectorFilter, componentType: ComponentType.RoleSelect, time: 1_200_000 });
 	const buttonCollector = response.createMessageComponentCollector({ filter: collectorFilter, componentType: ComponentType.Button, time: 1_200_000 });
 
+	// User select menu
 	userCollector.on('collect', async userInput => {
 		await userInput.deferReply({ ephemeral: true });
 
@@ -57,6 +61,7 @@ async function manualRoleAssignment(initialInteraction) {
 		await userInput.editReply(currentlySelectedUsers);
 	});
 
+	// Role select menu
 	roleCollector.on('collect', async roleInput => {
 		await roleInput.deferReply({ ephemeral: true });
 
@@ -74,6 +79,7 @@ async function manualRoleAssignment(initialInteraction) {
 		await roleInput.editReply(currentlySelectedRoles);
 	});
 
+	// Confirm button
 	buttonCollector.on('collect', async confirmButton => {
 		if (!selectionsMade[0] || !selectionsMade[1]) {
 			await confirmButton.reply({
