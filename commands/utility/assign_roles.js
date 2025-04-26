@@ -122,8 +122,8 @@ async function automaticRoleAssignment(initialInteraction) {
                     .setLabel('Spreadsheet ID')
                     .setStyle(TextInputStyle.Short)
                     .setPlaceholder('Paste Sheet ID here')
-                    .setRequired(true)
-            )
+                    .setRequired(true),
+            ),
         );
 
     await initialInteraction.showModal(modal);
@@ -137,25 +137,40 @@ async function automaticRoleAssignment(initialInteraction) {
     const spreadsheet = await apiResult.body.json();
     const data = spreadsheet.sheets[0].data[0].rowData;
 
+    let errorLog = '';
+
     for (let entry = 1; entry < data.length; entry++) {
         const discUsername = data[entry].values[0]?.userEnteredValue?.stringValue;
         const roleName = data[entry].values[1]?.userEnteredValue?.stringValue;
 
-        if (!discUsername || !roleName) continue;
+        if (!discUsername || !roleName) {
+            errorLog += `Row ${entry + 1}: Missing username or role.\n`;
+            continue;
+        }
 
         const guild = modalSubmit.guild;
 
         const foundMembers = await guild.members.search({ query: discUsername, limit: 1 });
-        if (foundMembers.size !== 1) continue;
+        if (foundMembers.size !== 1) {
+            errorLog += `Row ${entry + 1}: User '${discUsername}' not found.\n`;
+            continue;
+        }
         const member = foundMembers.at(0);
 
         const role = guild.roles.cache.find(r => r.name === roleName);
-        if (!role) continue;
+        if (!role) {
+            errorLog += `Row ${entry + 1}: Role '${roleName}' not found.\n`;
+            continue;
+        }
 
         await member.roles.add(role);
     }
 
     await modalSubmit.editReply('Roles assigned based on spreadsheet!');
+
+    if (errorLog) {
+        await modalSubmit.followUp({ content: `Some issues occurred:\n${errorLog}`, ephemeral: true });
+    }
 }
 
 async function request_sheet(spreadsheetID) {
@@ -251,15 +266,12 @@ module.exports = {
 
 		const collector = response.createMessageComponentCollector({ filter: collectorFilter, componentType: ComponentType.StringSelect, time: 3_600_000 });
 
-		collector.on('collect', async i => {
-			const selection = i.values[0];
-
-			if (selection === 'manual') {
-				manualRoleAssignment(i);
-			}
-			else if (selection === 'automatic') {
-				automaticRoleAssignment(i);
-			}
-		});
+		collector.on('collect', async selectInteraction => {
+            if (selectInteraction.values[0] === 'manual') {
+                await manualRoleAssignment(selectInteraction);
+            } else {
+                await automaticRoleAssignment(selectInteraction);
+            }
+        });
 	},
 };
