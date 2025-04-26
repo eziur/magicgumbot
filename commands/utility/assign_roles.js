@@ -122,8 +122,8 @@ async function automaticRoleAssignment(initialInteraction) {
                     .setLabel('Spreadsheet ID')
                     .setStyle(TextInputStyle.Short)
                     .setPlaceholder('Paste Sheet ID here')
-                    .setRequired(true),
-            ),
+                    .setRequired(true)
+            )
         );
 
     await initialInteraction.showModal(modal);
@@ -137,59 +137,25 @@ async function automaticRoleAssignment(initialInteraction) {
     const spreadsheet = await apiResult.body.json();
     const data = spreadsheet.sheets[0].data[0].rowData;
 
-    const memberList = [];
     for (let entry = 1; entry < data.length; entry++) {
-        const discUsername = data[entry].values[1].userEnteredValue.stringValue;
-        memberList.push(discUsername);
+        const discUsername = data[entry].values[0]?.userEnteredValue?.stringValue;
+        const roleName = data[entry].values[1]?.userEnteredValue?.stringValue;
+
+        if (!discUsername || !roleName) continue;
+
+        const guild = modalSubmit.guild;
+
+        const foundMembers = await guild.members.search({ query: discUsername, limit: 1 });
+        if (foundMembers.size !== 1) continue;
+        const member = foundMembers.at(0);
+
+        const role = guild.roles.cache.find(r => r.name === roleName);
+        if (!role) continue;
+
+        await member.roles.add(role);
     }
 
-    const memberObjectArray = await fetch_members(modalSubmit, memberList);
-
-    const roleSelect = new RoleSelectMenuBuilder()
-        .setCustomId('select_roles_automatic')
-        .setPlaceholder('Select roles')
-        .setMinValues(1)
-        .setMaxValues(25);
-
-    const confirm = new ButtonBuilder()
-        .setCustomId('confirm_automatic_role_assign')
-        .setLabel('Confirm')
-        .setStyle(ButtonStyle.Success);
-
-    const row1 = new ActionRowBuilder().addComponents(roleSelect);
-    const row2 = new ActionRowBuilder().addComponents(confirm);
-
-    const response = await modalSubmit.editReply({
-        content: 'Select roles to assign to users',
-        components: [row1, row2],
-    });
-
-    const collectorFilter = i => i.user.id === modalSubmit.user.id;
-    const roleCollector = response.createMessageComponentCollector({ filter: collectorFilter, componentType: ComponentType.RoleSelect, time: 1_200_000 });
-    const buttonCollector = response.createMessageComponentCollector({ filter: collectorFilter, componentType: ComponentType.Button, time: 1_200_000 });
-
-    let selectedRoles = [];
-
-    roleCollector.on('collect', async roleInput => {
-        await roleInput.deferUpdate();
-        selectedRoles = roleInput.values;
-    });
-
-    buttonCollector.on('collect', async buttonInput => {
-        if (selectedRoles.length === 0) {
-            await buttonInput.reply({ content: 'Select at least 1 role.', ephemeral: true });
-            return;
-        }
-
-        await buttonInput.deferReply();
-
-        const finalCollection = new Collection();
-        for (const member of memberObjectArray) {
-            finalCollection.set(member.id, selectedRoles);
-        }
-
-        await assign_roles(buttonInput, finalCollection);
-    });
+    await modalSubmit.editReply('Roles assigned based on spreadsheet!');
 }
 
 async function request_sheet(spreadsheetID) {
