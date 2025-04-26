@@ -1,8 +1,8 @@
 const { ComponentType, Collection,
-	SlashCommandBuilder, ModalBuilder, ActionRowBuilder,
-	StringSelectMenuBuilder, StringSelectMenuOptionBuilder, UserSelectMenuBuilder, RoleSelectMenuBuilder,
-	ButtonBuilder, ButtonStyle, TextInputBuilder, TextInputStyle, ModalSubmitInteraction } = require('discord.js');
-const { request, Dispatcher } = require('undici');
+    SlashCommandBuilder, ActionRowBuilder,
+    StringSelectMenuBuilder, StringSelectMenuOptionBuilder, UserSelectMenuBuilder, RoleSelectMenuBuilder,
+    ButtonBuilder, ButtonStyle, TextInputBuilder, TextInputStyle, ModalBuilder } = require('discord.js');
+const { request } = require('undici');
 
 // Manual role assignment option selected
 async function manualRoleAssignment(initialInteraction) {
@@ -10,38 +10,38 @@ async function manualRoleAssignment(initialInteraction) {
 	const selectionsMade = [false, false];
 
 	// Build component
-	const userSelect = new UserSelectMenuBuilder()
+	const userSelectMenu = new UserSelectMenuBuilder()
 		.setCustomId('select_target_users')
 		.setPlaceholder('Select target users (Max 25)')
 		.setMinValues(1)
 		.setMaxValues(25);
 
-	const roleSelect = new RoleSelectMenuBuilder()
+	const roleSelectMenu = new RoleSelectMenuBuilder()
 		.setCustomId('select_roles_manual')
 		.setPlaceholder('Select roles (Max 25)')
 		.setMinValues(1)
 		.setMaxValues(25);
 
-	const confirm = new ButtonBuilder()
+	const confirmButton = new ButtonBuilder()
 		.setCustomId('confirm_manual_role_assign')
 		.setLabel('Confirm')
 		.setStyle(ButtonStyle.Success);
 
-	const row1 = new ActionRowBuilder().addComponents(userSelect);
-	const row2 = new ActionRowBuilder().addComponents(roleSelect);
-	const row3 = new ActionRowBuilder().addComponents(confirm);
+	const userSelectMenuRow = new ActionRowBuilder().addComponents(userSelectMenu);
+	const roleSelectMenuRow = new ActionRowBuilder().addComponents(roleSelectMenu);
+	const confirmButtonRow = new ActionRowBuilder().addComponents(confirmButton);
 
 	// Display component
 	const response = await initialInteraction.update({
 		content: 'Manual role assignment',
-		components: [row1, row2, row3],
+		components: [userSelectMenuRow, roleSelectMenuRow, confirmButtonRow],
 	});
 
-	const collectorFilter = i => i.user.id === initialInteraction.user.id;
+	const manualCollectorFilter = i => i.user.id === initialInteraction.user.id;
 
-	const userCollector = response.createMessageComponentCollector({ filter: collectorFilter, componentType: ComponentType.UserSelect, time: 1_200_000 });
-	const roleCollector = response.createMessageComponentCollector({ filter: collectorFilter, componentType: ComponentType.RoleSelect, time: 1_200_000 });
-	const buttonCollector = response.createMessageComponentCollector({ filter: collectorFilter, componentType: ComponentType.Button, time: 1_200_000 });
+	const userCollector = response.createMessageComponentCollector({ filter: manualCollectorFilter, componentType: ComponentType.UserSelect, time: 1_200_000 });
+	const roleCollector = response.createMessageComponentCollector({ filter: manualCollectorFilter, componentType: ComponentType.RoleSelect, time: 1_200_000 });
+	const buttonCollector = response.createMessageComponentCollector({ filter: manualCollectorFilter, componentType: ComponentType.Button, time: 1_200_000 });
 
 	// User select menu
 	userCollector.on('collect', async userInput => {
@@ -111,170 +111,85 @@ async function manualRoleAssignment(initialInteraction) {
 	});
 }
 
-async function automaticRoleAssignment(interaction) {
-	const finalCollection = new Collection();
+async function automaticRoleAssignment(initialInteraction) {
+    const modal = new ModalBuilder()
+        .setCustomId('submit_sheet_id')
+        .setTitle('Enter Spreadsheet ID')
+        .addComponents(
+            new ActionRowBuilder().addComponents(
+                new TextInputBuilder()
+                    .setCustomId('sheet_id_input')
+                    .setLabel('Spreadsheet ID')
+                    .setStyle(TextInputStyle.Short)
+                    .setPlaceholder('Paste Sheet ID here')
+                    .setRequired(true),
+            ),
+        );
 
-	// Build modal components
-	const requestInput = new TextInputBuilder()
-		.setCustomId('api_request_input')
-		.setLabel("Enter Sheet ID")
-		.setStyle(TextInputStyle.Short)
-		.setPlaceholder('docs.google.com/spreadsheets/d/ID/edit')
-		.setValue('1cX3nPtL3GApqV6Jp3UNDIDbrZ1VhBYUFKe0gGk3rHTI')
-		.setRequired(true);
+    await initialInteraction.showModal(modal);
 
-	const automaticRoleAssignmentModal = new ModalBuilder()
-		.setCustomId('automatic_role_assignment_modal')
-		.setTitle('Automatic Role Assignment');
+    const modalSubmit = await initialInteraction.awaitModalSubmit({ time: 120_000 });
+    const spreadsheetID = modalSubmit.fields.getTextInputValue('sheet_id_input');
 
-	const requestInputRow = new ActionRowBuilder().addComponents(requestInput);
+    await modalSubmit.deferReply();
 
-	automaticRoleAssignmentModal.addComponents(requestInputRow);
+    const apiResult = await request_sheet(spreadsheetID);
+    const spreadsheet = await apiResult.body.json();
+    const data = spreadsheet.sheets[0].data[0].rowData;
 
-	// display modal
-	await interaction.showModal(automaticRoleAssignmentModal);
+    const memberList = [];
+    for (let entry = 1; entry < data.length; entry++) {
+        const discUsername = data[entry].values[1].userEnteredValue.stringValue;
+        memberList.push(discUsername);
+    }
 
-	// listen for modal submission
-	const filter = (modalInteraction) => modalInteraction.customId === 'automatic_role_assignment_modal';
+    const memberObjectArray = await fetch_members(modalSubmit, memberList);
 
-	const modalSubmit = await interaction.awaitModalSubmit({ filter, time: 600_000 })
-	.catch(modalSubmitError => {
-		console.error(modalSubmitError);
-	});
+    const roleSelect = new RoleSelectMenuBuilder()
+        .setCustomId('select_roles_automatic')
+        .setPlaceholder('Select roles')
+        .setMinValues(1)
+        .setMaxValues(25);
 
-	// get submitted value
-	const spreadsheetID = modalSubmit.fields.getTextInputValue('api_request_input');
-	await modalSubmit.deferUpdate();
+    const confirm = new ButtonBuilder()
+        .setCustomId('confirm_automatic_role_assign')
+        .setLabel('Confirm')
+        .setStyle(ButtonStyle.Success);
 
-	// request sheet from api and interpret data
-	const apiResult = await request_sheet(spreadsheetID);
-	const spreadsheet = await apiResult.body.json();
-	const data = spreadsheet.sheets[0].data[0].rowData;
+    const row1 = new ActionRowBuilder().addComponents(roleSelect);
+    const row2 = new ActionRowBuilder().addComponents(confirm);
 
-	const memberList = [];
-	for (let entry = 1; entry < data.length; entry++) {
-		const discUsername = data[entry].values[1].userEnteredValue.stringValue;
-		memberList.push(discUsername);
-	}
+    const response = await modalSubmit.editReply({
+        content: 'Select roles to assign to users',
+        components: [row1, row2],
+    });
 
-	const memberObjectArray = await fetch_members(modalSubmit, memberList);
+    const collectorFilter = i => i.user.id === modalSubmit.user.id;
+    const roleCollector = response.createMessageComponentCollector({ filter: collectorFilter, componentType: ComponentType.RoleSelect, time: 1_200_000 });
+    const buttonCollector = response.createMessageComponentCollector({ filter: collectorFilter, componentType: ComponentType.Button, time: 1_200_000 });
 
-	// build role selection menu
-	const roleSelect = new RoleSelectMenuBuilder()
-		.setCustomId('select_roles_automatic')
-		.setPlaceholder('Select roles (Max 25). The selected roles will be assigned to each user in the sheet')
-		.setMinValues(1)
-		.setMaxValues(25);
+    let selectedRoles = [];
 
-	const preview = new ButtonBuilder()
-		.setCustomId('preview_user_list')
-		.setLabel('Preview User List')
-		.setStyle(ButtonStyle.Primary);
+    roleCollector.on('collect', async roleInput => {
+        await roleInput.deferUpdate();
+        selectedRoles = roleInput.values;
+    });
 
-	const preview_disabled = new ButtonBuilder()
-		.setCustomId('preview_user_list_disabled')
-		.setLabel('Preview User List')
-		.setStyle(ButtonStyle.Primary)
-		.setDisabled(true);
+    buttonCollector.on('collect', async buttonInput => {
+        if (selectedRoles.length === 0) {
+            await buttonInput.reply({ content: 'Select at least 1 role.', ephemeral: true });
+            return;
+        }
 
-	const confirm = new ButtonBuilder()
-		.setCustomId('confirm_automatic_role_assign')
-		.setLabel('Confirm')
-		.setStyle(ButtonStyle.Success);
+        await buttonInput.deferReply();
 
-	const cancel = new ButtonBuilder()
-		.setCustomId('cancel_role_select_automatic')
-		.setLabel('Cancel')
-		.setStyle(ButtonStyle.Danger);
+        const finalCollection = new Collection();
+        for (const member of memberObjectArray) {
+            finalCollection.set(member.id, selectedRoles);
+        }
 
-	const row1 = new ActionRowBuilder().addComponents(roleSelect);
-	const row2 = new ActionRowBuilder().addComponents(preview);
-	const row2_disabled = new ActionRowBuilder().addComponents(preview_disabled);
-	const row3 = new ActionRowBuilder().addComponents(confirm, cancel);
-
-	const response = await modalSubmit.editReply({
-		content: 'Automatic Role Assignment',
-		components: [row1, row2, row3],
-	});
-
-	const collectorFilter = i => i.user.id === modalSubmit.user.id;
-
-	// listen for response
-	const roleCollector = response.createMessageComponentCollector({ filter: collectorFilter, componentType: ComponentType.RoleSelect, time: 1_200_000 });
-	const buttonCollector = response.createMessageComponentCollector({ filter: collectorFilter, componentType: ComponentType.Button, time: 1_200_000 });
-
-	let roleSelected = false;
-
-	roleCollector.on('collect', async roleInput => {
-		await roleInput.deferUpdate();
-
-		if (roleCollector.collected.at(0).replied) {
-			roleCollector.collected.at(0).deleteReply();
-			roleCollector.collected.delete(roleCollector.collected.firstKey());
-		}
-
-		if (roleInput.values.length > 0) roleSelected = true;
-		else roleSelected = false;
-	});
-
-	buttonCollector.on('collect', async buttonInteraction => {
-		if (buttonInteraction.component.customId === 'cancel_role_select_automatic') {
-			const automatic_role_select_cancel = await buttonInteraction.reply("Interaction cancelled");
-			setTimeout(() => automatic_role_select_cancel.delete(), 10_000);
-			await modalSubmit.editReply({ components: [] });
-		}
-
-		else if (buttonInteraction.component.customId === 'preview_user_list') {
-			if (!roleSelected) {
-				await buttonInteraction.reply({
-					content: 'Select at least 1 role.',
-					ephemeral: true,
-				});
-				setTimeout(() => buttonInteraction.deleteReply(), 10_000);
-			}
-			else {
-				await modalSubmit.editReply({ components: [row1, row2_disabled, row3] });
-
-				const numUsers = memberObjectArray.length;
-				let userList = `${numUsers} users were retrieved from the spreadsheet: \n`;
-				for (let i = 0; i < numUsers; i++) {
-					userList += `${memberObjectArray[i].user.tag} \n`;
-				}
-
-				await buttonInteraction.reply({
-					content: userList,
-					ephemeral: true,
-				});
-				setTimeout(() => buttonInteraction.deleteReply(), 100_000);
-			}
-		}
-
-		else if (buttonInteraction.component.customId === 'confirm_automatic_role_assign') {
-			if (!roleSelected) {
-				await buttonInteraction.reply({
-					content: 'Select at least 1 role.',
-					ephemeral: true,
-				});
-				setTimeout(() => buttonInteraction.deleteReply(), 10_000);
-			}
-			else {
-				await buttonInteraction.deferReply();
-
-				for (let i = 0; i < memberObjectArray.length; i++) {
-					const rolesToAssign = [];
-
-					roleCollector.collected.at(0).roles.each(role => {
-						rolesToAssign.push(role.id);
-					});
-
-					finalCollection.set(memberObjectArray[i].id, rolesToAssign);
-				}
-
-				assign_roles(buttonInteraction, finalCollection);
-				modalSubmit.deleteReply();
-			}
-		}
-	});
+        await assign_roles(buttonInput, finalCollection);
+    });
 }
 
 async function request_sheet(spreadsheetID) {
@@ -283,7 +198,7 @@ async function request_sheet(spreadsheetID) {
 
 	params.set('spreadsheetID', spreadsheetID);
 	params.set('includeGridData', 'true');
-	params.set('ranges', 'C:D');
+	params.set('ranges', 'A:C');
 
 	const query = `https://sheets.googleapis.com/v4/
 		spreadsheets/${params.get('spreadsheetID')}/?
